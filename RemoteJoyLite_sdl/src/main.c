@@ -3,7 +3,7 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 
-#include <libusb-1.0/libusb.h>
+#include <libusb.h>
 #include <stdio.h>
 #include <stdint.h>
 
@@ -64,7 +64,7 @@ static int usbCheckDevice(void)
   }
   int mag = HOSTFS_MAGIC;
   int len = 0;
-  int ret = libusb_bulk_transfer(gUsbDev, EP_OUT, (char *)&mag, 4, &len, 1000);
+  int ret = libusb_bulk_transfer(gUsbDev, EP_OUT, (unsigned char *)&mag, 4, &len, 1000);
   if (len == 4)
   {
     return 0;
@@ -123,7 +123,7 @@ static void remotejoyAsync(void *read, int read_len)
   {
     // dprintf( 0, 0, "%s", (void *)(cmd+1) );
     printf("psp debug message begin:\n");
-    printf("%s", (void *)(cmd + 1));
+    printf("%s", (char *)(cmd + 1));
     printf("psp debug message end:\n");
   }
 }
@@ -159,7 +159,7 @@ static void sendEvent(int type, uint32_t value1, uint32_t value2)
   data.event.value1  = value1;
   data.event.value2  = value2;
   int len            = 0;
-  ret                = libusb_bulk_transfer(gUsbDev, EP_OUT_EVENT, (char *)&data, sizeof(data), &len, 10000);
+  ret                = libusb_bulk_transfer(gUsbDev, EP_OUT_EVENT, (unsigned char *)&data, sizeof(data), &len, 10000);
   if (ret < 0)
   {
     return;
@@ -197,7 +197,7 @@ static void handleHello(void)
   Resp.cmd.magic   = HOSTFS_MAGIC;
   Resp.cmd.command = HOSTFS_CMD_HELLO(RJL_VERSION);
   int len          = 0;
-  ret              = libusb_bulk_transfer(gUsbDev, EP_OUT, (char *)&Resp, sizeof(Resp), &len, 10000);
+  ret              = libusb_bulk_transfer(gUsbDev, EP_OUT, (unsigned char *)&Resp, sizeof(Resp), &len, 10000);
   if (ret < 0)
   {
     return;
@@ -267,7 +267,7 @@ static void doBulk(void *read, int read_len)
       rest_size = HOSTFS_MAX_BLOCK;
     }
     int len = 0;
-    int ret = libusb_bulk_transfer(gUsbDev, EP_IN, &gBulkBlock[read_size], rest_size, &len, 3000);
+    int ret = libusb_bulk_transfer(gUsbDev, EP_IN, (unsigned char *)&gBulkBlock[read_size], rest_size, &len, 3000);
 
     if (ret == LIBUSB_ERROR_TIMEOUT)
     {
@@ -297,7 +297,7 @@ static int UsbThread(void *ptr)
       {
         uint32_t data[512 / sizeof(uint32_t)];
         int len = 0;
-        int ret = libusb_bulk_transfer(gUsbDev, EP_IN, (char *)data, 512, &len, 1000);
+        int ret = libusb_bulk_transfer(gUsbDev, EP_IN, (unsigned char *)data, 512, &len, 1000);
         if (ret == LIBUSB_ERROR_TIMEOUT)
         {
           continue;
@@ -451,7 +451,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv)
 {
   SDL_SetAppMetadata("RemoteJoyLite", "0.19", "com.psparchive.rjl");
 
-  if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMEPAD) < 0)
+  if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMEPAD))
     return -1;
 
   SDL_CreateWindowAndRenderer("RemoteJoyLite", SCREEN_WIDTH, SCREEN_HEIGHT, SDL_WINDOW_RESIZABLE, &gWindow, &gRenderer);
@@ -516,10 +516,12 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event)
     case SDL_EVENT_QUIT:
       return SDL_APP_SUCCESS;
     case SDL_EVENT_GAMEPAD_ADDED:
+    {
       // TODO: handle multiple gamepads
       const SDL_JoystickID which = event->gdevice.which;
       gGamepad                   = SDL_OpenGamepad(which);
       break;
+    }
     case SDL_EVENT_GAMEPAD_REMOVED:
       // TODO
       break;
