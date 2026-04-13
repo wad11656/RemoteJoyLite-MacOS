@@ -6,6 +6,8 @@
 #include <libusb.h>
 #include <stdio.h>
 #include <stdint.h>
+#include <time.h>
+#include <string.h>
 
 #include "remotejoy.h"
 
@@ -22,6 +24,41 @@ static SDL_Renderer *gRenderer = NULL;
 static SDL_Thread *gUsbThread  = NULL;
 static SDL_Texture *gTex       = NULL;
 static SDL_Gamepad *gGamepad   = NULL;
+static int gRecording          = 0;
+static int gTitlebarOnHover    = 1;
+static Uint64 gRecordingStartTicks = 0;
+static Uint64 gRecordingLastFrameTicks = 0;
+static const Uint64 gRecordingFrameIntervalNs = SDL_NS_PER_SECOND / 30;
+
+#ifdef __APPLE__
+extern void MacInstallMenus(void);
+extern void MacApplyWindowChrome(SDL_Window *window, int titlebar_on_hover);
+extern void MacSetRecordingMenuState(int recording);
+extern void MacSetTitlebarMenuState(int enabled);
+extern int MacStartRecording(int width, int height);
+extern void MacAppendRecordingFrame(const void *pixels, int width, int height, int pitch, SDL_PixelFormat format,
+                                     Uint64 capture_ticks_ns);
+extern void MacStopRecording(void);
+extern void MacShowToastMessage(const char *message);
+#else
+static void MacInstallMenus(void) { }
+static void MacApplyWindowChrome(SDL_Window *window, int titlebar_on_hover) { (void)window; (void)titlebar_on_hover; }
+static void MacSetRecordingMenuState(int recording) { (void)recording; }
+static void MacSetTitlebarMenuState(int enabled) { (void)enabled; }
+static int MacStartRecording(int width, int height) { (void)width; (void)height; return 0; }
+static void MacAppendRecordingFrame(const void *pixels, int width, int height, int pitch, SDL_PixelFormat format,
+                                    Uint64 capture_ticks_ns)
+{
+  (void)pixels;
+  (void)width;
+  (void)height;
+  (void)pitch;
+  (void)format;
+  (void)capture_ticks_ns;
+}
+static void MacStopRecording(void) { }
+static void MacShowToastMessage(const char *message) { (void)message; }
+#endif
 
 // usb stuff
 static int gUsbHostfsReady = 0;
@@ -34,6 +71,62 @@ static int gUsbHostError = 0;
 static uint8_t gBuf[SCREEN_WIDTH * SCREEN_HEIGHT * 4];
 static uint32_t gBufSize = 0;
 static uint8_t gBufMode;
+
+void RemoteJoyLiteToggleRecording(void)
+{
+  if (gRecording)
+  {
+    gRecording = 0;
+    gRecordingStartTicks = 0;
+    gRecordingLastFrameTicks = 0;
+    MacSetRecordingMenuState(gRecording);
+    MacStopRecording();
+    MacShowToastMessage("Recording stopped");
+    return;
+  }
+
+  if (MacStartRecording(SCREEN_WIDTH, SCREEN_HEIGHT))
+  {
+    gRecordingStartTicks = SDL_GetTicksNS();
+    gRecordingLastFrameTicks = 0;
+    gRecording = 1;
+    MacSetRecordingMenuState(gRecording);
+    MacShowToastMessage("Recording started");
+  }
+}
+
+void RemoteJoyLiteToggleTitlebarOnHover(void)
+{
+  gTitlebarOnHover = !gTitlebarOnHover;
+  MacSetTitlebarMenuState(gTitlebarOnHover);
+  MacApplyWindowChrome(gWindow, gTitlebarOnHover);
+  SDL_SetWindowAspectRatio(gWindow, (float)SCREEN_WIDTH / (float)SCREEN_HEIGHT, (float)SCREEN_WIDTH / (float)SCREEN_HEIGHT);
+}
+
+static void CaptureRecordingFrame(SDL_Surface *source)
+{
+  if (!gRecording || source == NULL)
+  {
+    return;
+  }
+
+  Uint64 capture_ticks_ns = SDL_GetTicksNS();
+  if (gRecordingStartTicks != 0 && capture_ticks_ns >= gRecordingStartTicks)
+  {
+    capture_ticks_ns -= gRecordingStartTicks;
+  }
+  else
+  {
+    capture_ticks_ns = 0;
+  }
+
+  if (gRecordingLastFrameTicks != 0 && capture_ticks_ns < (gRecordingLastFrameTicks + gRecordingFrameIntervalNs))
+  {
+    return;
+  }
+  gRecordingLastFrameTicks = capture_ticks_ns;
+  MacAppendRecordingFrame(source->pixels, source->w, source->h, source->pitch, source->format, capture_ticks_ns);
+}
 
 static void usbInit()
 {
@@ -454,8 +547,10 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv)
   if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMEPAD))
     return -1;
 
-  SDL_CreateWindowAndRenderer("RemoteJoyLite", SCREEN_WIDTH, SCREEN_HEIGHT, SDL_WINDOW_RESIZABLE, &gWindow, &gRenderer);
+  SDL_WindowFlags window_flags = SDL_WINDOW_RESIZABLE;
+  SDL_CreateWindowAndRenderer("RemoteJoyLite", SCREEN_WIDTH, SCREEN_HEIGHT, window_flags, &gWindow, &gRenderer);
   SDL_SetRenderLogicalPresentation(gRenderer, SCREEN_WIDTH, SCREEN_HEIGHT, SDL_LOGICAL_PRESENTATION_LETTERBOX);
+  SDL_SetWindowAspectRatio(gWindow, (float)SCREEN_WIDTH / (float)SCREEN_HEIGHT, (float)SCREEN_WIDTH / (float)SCREEN_HEIGHT);
 
   SDL_SetRenderVSync(gRenderer, -1);
 
@@ -465,6 +560,10 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv)
   SDL_SetTextureScaleMode(gTex, SDL_SCALEMODE_NEAREST);
 
   gUsbThread = SDL_CreateThread(UsbThread, "UsbThread", (void *)NULL);
+  MacInstallMenus();
+  MacApplyWindowChrome(gWindow, gTitlebarOnHover);
+  MacSetTitlebarMenuState(gTitlebarOnHover);
+  MacSetRecordingMenuState(gRecording);
 
   return SDL_APP_CONTINUE;
 }
@@ -500,10 +599,12 @@ SDL_AppResult SDL_AppIterate(void *appstate)
   {
     SDL_BlitSurface(src, NULL, dst, NULL);
     SDL_UnlockTexture(gTex);
-    SDL_DestroySurface(src);
   }
 
   SDL_RenderTexture(gRenderer, gTex, NULL, NULL);
+
+  CaptureRecordingFrame(src);
+  SDL_DestroySurface(src);
 
   SDL_RenderPresent(gRenderer);
   return SDL_APP_CONTINUE;
@@ -592,9 +693,12 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event)
         case SDL_SCANCODE_3:
           SDL_SetWindowSize(gWindow, SCREEN_WIDTH * 3, SCREEN_HEIGHT * 3);
           break;
+        case SDL_SCANCODE_F10:
+          RemoteJoyLiteToggleRecording();
+          break;
         default:
           break;
-      }
+        }
       // Update PSP input state from keyboard using PPSSPP-style defaults
       UpdateKeyboardInput();
       break;
