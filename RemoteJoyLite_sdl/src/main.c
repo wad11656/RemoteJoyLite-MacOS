@@ -26,14 +26,17 @@ static SDL_Texture *gTex       = NULL;
 static SDL_Gamepad *gGamepad   = NULL;
 static int gRecording          = 0;
 static int gTitlebarOnHover    = 1;
+static int gRecordingQuality   = 0; // 0 = High, 1 = Max
 static Uint64 gRecordingStartTicks = 0;
 static Uint64 gRecordingLastFrameTicks = 0;
 static const Uint64 gRecordingFrameIntervalNs = SDL_NS_PER_SECOND / 30;
+static const char *kRecordingQualityPreferenceFile = "recording_quality.txt";
 
 #ifdef __APPLE__
 extern void MacInstallMenus(void);
 extern void MacApplyWindowChrome(SDL_Window *window, int titlebar_on_hover);
 extern void MacSetRecordingMenuState(int recording);
+extern void MacSetRecordingQualityMenuState(int quality);
 extern void MacSetTitlebarMenuState(int enabled);
 extern int MacStartRecording(int width, int height);
 extern void MacAppendRecordingFrame(const void *pixels, int width, int height, int pitch, SDL_PixelFormat format,
@@ -44,6 +47,7 @@ extern void MacShowToastMessage(const char *message);
 static void MacInstallMenus(void) { }
 static void MacApplyWindowChrome(SDL_Window *window, int titlebar_on_hover) { (void)window; (void)titlebar_on_hover; }
 static void MacSetRecordingMenuState(int recording) { (void)recording; }
+static void MacSetRecordingQualityMenuState(int quality) { (void)quality; }
 static void MacSetTitlebarMenuState(int enabled) { (void)enabled; }
 static int MacStartRecording(int width, int height) { (void)width; (void)height; return 0; }
 static void MacAppendRecordingFrame(const void *pixels, int width, int height, int pitch, SDL_PixelFormat format,
@@ -59,6 +63,67 @@ static void MacAppendRecordingFrame(const void *pixels, int width, int height, i
 static void MacStopRecording(void) { }
 static void MacShowToastMessage(const char *message) { (void)message; }
 #endif
+
+static int LoadRecordingQualityPreference(void)
+{
+  char *prefPath = SDL_GetPrefPath("psparchive", "RemoteJoyLite");
+  if (prefPath == NULL)
+  {
+    return 0;
+  }
+
+  char filePath[4096];
+  SDL_snprintf(filePath, sizeof(filePath), "%s%s", prefPath, kRecordingQualityPreferenceFile);
+
+  FILE *fp = fopen(filePath, "r");
+  SDL_free(prefPath);
+  if (fp == NULL)
+  {
+    return 0;
+  }
+
+  int quality = 0;
+  if (fscanf(fp, "%d", &quality) != 1)
+  {
+    quality = 0;
+  }
+  fclose(fp);
+  return (quality != 0) ? 1 : 0;
+}
+
+static void SaveRecordingQualityPreference(int quality)
+{
+  char *prefPath = SDL_GetPrefPath("psparchive", "RemoteJoyLite");
+  if (prefPath == NULL)
+  {
+    return;
+  }
+
+  char filePath[4096];
+  SDL_snprintf(filePath, sizeof(filePath), "%s%s", prefPath, kRecordingQualityPreferenceFile);
+
+  FILE *fp = fopen(filePath, "w");
+  SDL_free(prefPath);
+  if (fp == NULL)
+  {
+    return;
+  }
+
+  fprintf(fp, "%d\n", (quality != 0) ? 1 : 0);
+  fclose(fp);
+}
+
+int RemoteJoyLiteGetRecordingQuality(void)
+{
+  return gRecordingQuality;
+}
+
+void RemoteJoyLiteSetRecordingQuality(int quality)
+{
+  gRecordingQuality = (quality != 0) ? 1 : 0;
+  SaveRecordingQualityPreference(gRecordingQuality);
+  MacSetRecordingQualityMenuState(gRecordingQuality);
+}
 
 // usb stuff
 static int gUsbHostfsReady = 0;
@@ -80,6 +145,7 @@ void RemoteJoyLiteToggleRecording(void)
     gRecordingStartTicks = 0;
     gRecordingLastFrameTicks = 0;
     MacSetRecordingMenuState(gRecording);
+    MacSetRecordingQualityMenuState(gRecordingQuality);
     MacStopRecording();
     MacShowToastMessage("Recording stopped");
     return;
@@ -91,6 +157,7 @@ void RemoteJoyLiteToggleRecording(void)
     gRecordingLastFrameTicks = 0;
     gRecording = 1;
     MacSetRecordingMenuState(gRecording);
+    MacSetRecordingQualityMenuState(gRecordingQuality);
     MacShowToastMessage("Recording started");
   }
 }
@@ -563,7 +630,9 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char **argv)
   MacInstallMenus();
   MacApplyWindowChrome(gWindow, gTitlebarOnHover);
   MacSetTitlebarMenuState(gTitlebarOnHover);
+  gRecordingQuality = LoadRecordingQualityPreference();
   MacSetRecordingMenuState(gRecording);
+  MacSetRecordingQualityMenuState(gRecordingQuality);
 
   return SDL_APP_CONTINUE;
 }

@@ -1,3 +1,0 @@
-/Users/hbitadmin/Documents/repos/RemoteJoyLite-MacOS/build-macos/CMakeFiles/RemoteJoyLite-cross.dir
-/Users/hbitadmin/Documents/repos/RemoteJoyLite-MacOS/build-macos/CMakeFiles/edit_cache.dir
-/Users/hbitadmin/Documents/repos/RemoteJoyLite-MacOS/build-macos/CMakeFiles/rebuild_cache.dir

@@ -1,5 +1,6 @@
 #import <AppKit/AppKit.h>
 #import <AVFoundation/AVFoundation.h>
+#import <CoreGraphics/CoreGraphics.h>
 #import <CoreMedia/CoreMedia.h>
 #import <CoreVideo/CoreVideo.h>
 #import <Foundation/Foundation.h>
@@ -9,14 +10,28 @@
 #include <SDL3/SDL_video.h>
 #include <stdlib.h>
 
+#if __has_include(<ScreenCaptureKit/ScreenCaptureKit.h>)
+#import <ScreenCaptureKit/ScreenCaptureKit.h>
+#define HAS_SCREENCAPTUREKIT 1
+#else
+#define HAS_SCREENCAPTUREKIT 0
+#endif
+
 extern "C" void RemoteJoyLiteToggleRecording(void);
+extern "C" void RemoteJoyLiteSetRecordingQuality(int quality);
+extern "C" int RemoteJoyLiteGetRecordingQuality(void);
 extern "C" void RemoteJoyLiteToggleTitlebarOnHover(void);
 extern "C" void MacRevealRecordingFolder(const char *path);
 extern "C" void MacShowToastMessage(const char *message);
 
+static BOOL HasScreenCapturePermission(void);
+
 static NSWindow *sWindow = nil;
 static NSMenuItem *sTitlebarItem = nil;
-static NSMenuItem *sRecordItem = nil;
+static NSMenuItem *sRecordingMenuItem = nil;
+static NSMenuItem *sRecordingItem = nil;
+static NSMenuItem *sHighQualityItem = nil;
+static NSMenuItem *sMaxQualityItem = nil;
 static NSTrackingArea *sTrackingArea = nil;
 static NSView *sDragRegionView = nil;
 static BOOL sMouseInsideWindow = NO;
@@ -197,7 +212,7 @@ static RemoteJoyLiteToastController *sToastController = nil;
   CMTime _lastPTS;
 }
 
-- (BOOL)startWithWidth:(int)width height:(int)height;
+- (BOOL)startWithWidth:(int)width height:(int)height quality:(int)quality;
 - (void)appendFramePixels:(const void *)pixels width:(int)width height:(int)height pitch:(int)pitch pixelFormat:(SDL_PixelFormat)pixelFormat captureTicks:(Uint64)captureTicks;
 - (void)appendCapturedFrameData:(NSData *)frameData width:(int)width height:(int)height pitch:(int)pitch pixelFormat:(SDL_PixelFormat)pixelFormat pts:(CMTime)pts;
 - (void)finishRecording;
@@ -237,7 +252,7 @@ static RemoteJoyLiteToastController *sToastController = nil;
   return stamp;
 }
 
-- (BOOL)startWithWidth:(int)width height:(int)height
+- (BOOL)startWithWidth:(int)width height:(int)height quality:(int)quality
 {
   if (_recording)
   {
@@ -255,14 +270,32 @@ static RemoteJoyLiteToastController *sToastController = nil;
   }
 
   NSString *stamp = [self timestampString];
-  NSString *filename = [NSString stringWithFormat:@"RemoteJoyLite-%@.mp4", stamp];
+  BOOL maxQuality = (quality != 0);
+  NSString *filename = [NSString stringWithFormat:@"RemoteJoyLite-%@.%@", stamp, maxQuality ? @"mov" : @"mp4"];
   NSString *fullPath = [folder stringByAppendingPathComponent:filename];
   NSURL *url = [NSURL fileURLWithPath:fullPath];
 
-  NSDictionary *settings =
-      @{ AVVideoCodecKey : AVVideoCodecTypeH264, AVVideoWidthKey : @(width), AVVideoHeightKey : @(height) };
+  NSDictionary *settings = nil;
+  NSString *fileType = nil;
+  if (maxQuality)
+  {
+    settings = @{ AVVideoCodecKey : AVVideoCodecTypeAppleProRes4444, AVVideoWidthKey : @(width),
+                  AVVideoHeightKey : @(height) };
+    fileType = AVFileTypeQuickTimeMovie;
+  }
+  else
+  {
+    NSDictionary *compression =
+        @{ AVVideoAverageBitRateKey : @(24000000),
+           AVVideoProfileLevelKey : AVVideoProfileLevelH264HighAutoLevel,
+           AVVideoMaxKeyFrameIntervalKey : @(30),
+           AVVideoAllowFrameReorderingKey : @NO };
+    settings = @{ AVVideoCodecKey : AVVideoCodecTypeH264, AVVideoWidthKey : @(width), AVVideoHeightKey : @(height),
+                  AVVideoCompressionPropertiesKey : compression };
+    fileType = AVFileTypeMPEG4;
+  }
 
-  AVAssetWriter *writer = [[AVAssetWriter alloc] initWithURL:url fileType:AVFileTypeMPEG4 error:&error];
+  AVAssetWriter *writer = [[AVAssetWriter alloc] initWithURL:url fileType:fileType error:&error];
   if (writer == nil)
   {
     NSLog(@"RemoteJoyLite: failed to create writer for %@: %@", url, error);
@@ -473,6 +506,437 @@ static RemoteJoyLiteToastController *sToastController = nil;
 
 static RemoteJoyLiteVideoRecorder *sRecorder = nil;
 
+#if HAS_SCREENCAPTUREKIT
+@interface RemoteJoyLiteScreenRecorder : NSObject <SCStreamDelegate, SCStreamOutput>
+{
+  AVAssetWriter *_writer;
+  AVAssetWriterInput *_input;
+  AVAssetWriterInputPixelBufferAdaptor *_adaptor;
+  SCStream *_stream;
+  dispatch_queue_t _sampleQueue;
+  NSURL *_outputURL;
+  NSString *_outputFolder;
+  BOOL _recording;
+  BOOL _stopping;
+  BOOL _sessionStarted;
+  CMTime _lastPTS;
+}
+
+- (BOOL)startWithWindow:(NSWindow *)window quality:(int)quality;
+- (void)finishRecording;
+- (NSString *)outputFolder;
+@end
+
+@implementation RemoteJoyLiteScreenRecorder
+
+- (void)dealloc
+{
+  [_input release];
+  [_adaptor release];
+  [_writer release];
+  [_stream release];
+  [_outputURL release];
+  [_outputFolder release];
+  [super dealloc];
+}
+
+- (NSString *)moviesDirectory
+{
+  NSArray<NSString *> *movies = NSSearchPathForDirectoriesInDomains(NSMoviesDirectory, NSUserDomainMask, YES);
+  if (movies.count > 0)
+  {
+    return movies[0];
+  }
+  return [NSHomeDirectory() stringByAppendingPathComponent:@"Movies"];
+}
+
+- (NSString *)timestampString
+{
+  NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
+  [formatter setLocale:[[[NSLocale alloc] initWithLocaleIdentifier:@"en_US_POSIX"] autorelease]];
+  [formatter setDateFormat:@"yyyy-MM-dd_HH-mm-ss"];
+  NSString *stamp = [formatter stringFromDate:[NSDate date]];
+  [formatter release];
+  return stamp;
+}
+
+- (SCWindow *)findWindowForContent:(SCShareableContent *)content windowNumber:(NSInteger)windowNumber
+{
+  for (SCWindow *candidate in content.windows)
+  {
+    if ((NSInteger)candidate.windowID == windowNumber)
+    {
+      return candidate;
+    }
+  }
+  return nil;
+}
+
+- (BOOL)prepareWriterAtURL:(NSURL *)url width:(int)width height:(int)height
+{
+  NSError *error = nil;
+
+  NSDictionary *compression =
+      @{ AVVideoAverageBitRateKey : @(18000000),
+         AVVideoMaxKeyFrameIntervalKey : @(30),
+         AVVideoAllowFrameReorderingKey : @NO };
+  NSDictionary *settings =
+      @{ AVVideoCodecKey : AVVideoCodecTypeHEVC, AVVideoWidthKey : @(width), AVVideoHeightKey : @(height),
+         AVVideoCompressionPropertiesKey : compression };
+
+  AVAssetWriter *writer = [[AVAssetWriter alloc] initWithURL:url fileType:AVFileTypeQuickTimeMovie error:&error];
+  if (writer == nil)
+  {
+    NSLog(@"RemoteJoyLite: failed to create writer for %@: %@", url, error);
+    return NO;
+  }
+
+  AVAssetWriterInput *input = [[AVAssetWriterInput alloc] initWithMediaType:AVMediaTypeVideo outputSettings:settings];
+  [input setExpectsMediaDataInRealTime:YES];
+
+  NSDictionary *attributes =
+      @{ (id)kCVPixelBufferPixelFormatTypeKey : @(kCVPixelFormatType_32BGRA),
+         (id)kCVPixelBufferWidthKey : @(width),
+         (id)kCVPixelBufferHeightKey : @(height),
+         (id)kCVPixelBufferCGBitmapContextCompatibilityKey : @YES,
+         (id)kCVPixelBufferCGImageCompatibilityKey : @YES,
+         (id)kCVPixelBufferIOSurfacePropertiesKey : @{} };
+
+  AVAssetWriterInputPixelBufferAdaptor *adaptor =
+      [[AVAssetWriterInputPixelBufferAdaptor alloc] initWithAssetWriterInput:input
+                                                  sourcePixelBufferAttributes:attributes];
+
+  if (![writer canAddInput:input])
+  {
+    NSLog(@"RemoteJoyLite: writer rejected input");
+    [adaptor release];
+    [input release];
+    [writer release];
+    return NO;
+  }
+
+  [writer addInput:input];
+  if (![writer startWriting])
+  {
+    NSLog(@"RemoteJoyLite: startWriting failed: %@", [writer error]);
+    [adaptor release];
+    [input release];
+    [writer release];
+    return NO;
+  }
+
+  [_writer release];
+  _writer = writer;
+  [_input release];
+  _input = input;
+  [_adaptor release];
+  _adaptor = adaptor;
+  _sessionStarted = NO;
+  _lastPTS = kCMTimeZero;
+  return YES;
+}
+
+- (BOOL)startWithWindow:(NSWindow *)window quality:(int)quality
+{
+  if (_recording)
+  {
+    return YES;
+  }
+
+  if (@available(macOS 13.0, *))
+  {
+    if (window == nil)
+    {
+      NSLog(@"RemoteJoyLite: no window to capture");
+      return NO;
+    }
+
+    if (_sampleQueue == nil)
+    {
+      _sampleQueue = dispatch_queue_create("com.psparchive.RemoteJoyLite.screencapture", DISPATCH_QUEUE_SERIAL);
+    }
+
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSString *movies = [self moviesDirectory];
+    NSString *folder = [movies stringByAppendingPathComponent:@"RemoteJoyLite"];
+    NSError *error = nil;
+    if (![fm createDirectoryAtPath:folder withIntermediateDirectories:YES attributes:nil error:&error])
+    {
+      NSLog(@"RemoteJoyLite: failed to create recording folder %@: %@", folder, error);
+      return NO;
+    }
+
+    NSString *stamp = [self timestampString];
+    NSString *filename = [NSString stringWithFormat:@"RemoteJoyLite-%@.mov", stamp];
+    NSString *fullPath = [folder stringByAppendingPathComponent:filename];
+    NSURL *url = [NSURL fileURLWithPath:fullPath];
+
+    __block SCWindow *capturedWindow = nil;
+    dispatch_semaphore_t contentSem = dispatch_semaphore_create(0);
+    [SCShareableContent getShareableContentWithCompletionHandler:^(SCShareableContent *content, NSError *contentError) {
+      if (contentError != nil)
+      {
+        NSLog(@"RemoteJoyLite: ScreenCaptureKit content query failed: %@", contentError);
+      }
+      else
+      {
+        capturedWindow = [[self findWindowForContent:content windowNumber:[window windowNumber]] retain];
+      }
+      dispatch_semaphore_signal(contentSem);
+    }];
+    dispatch_semaphore_wait(contentSem, DISPATCH_TIME_FOREVER);
+    if (capturedWindow == nil)
+    {
+      NSLog(@"RemoteJoyLite: could not find capture window");
+      return NO;
+    }
+
+    NSRect contentRect = [window contentLayoutRect];
+    CGFloat scale = 1.0;
+    if ([window respondsToSelector:@selector(backingScaleFactor)])
+    {
+      scale = [window backingScaleFactor];
+    }
+
+    SCContentFilter *filter = [[SCContentFilter alloc] initWithDesktopIndependentWindow:capturedWindow];
+    SCStreamConfiguration *configuration = [[SCStreamConfiguration alloc] init];
+    configuration.width = MAX(1, (int)(contentRect.size.width * scale + 0.5));
+    configuration.height = MAX(1, (int)(contentRect.size.height * scale + 0.5));
+    configuration.minimumFrameInterval = CMTimeMake(1, 60);
+    configuration.pixelFormat = kCVPixelFormatType_32BGRA;
+    configuration.queueDepth = 5;
+    configuration.showsCursor = NO;
+    configuration.capturesAudio = NO;
+
+    if (![self prepareWriterAtURL:url width:configuration.width height:configuration.height])
+    {
+      [filter release];
+      [configuration release];
+      [capturedWindow release];
+      return NO;
+    }
+
+    SCStream *stream = [[SCStream alloc] initWithFilter:filter configuration:configuration delegate:self];
+    NSError *streamError = nil;
+    if (![stream addStreamOutput:self type:SCStreamOutputTypeScreen sampleHandlerQueue:_sampleQueue error:&streamError])
+    {
+      NSLog(@"RemoteJoyLite: addStreamOutput failed: %@", streamError);
+      [stream release];
+      [filter release];
+      [configuration release];
+      [capturedWindow release];
+      [_input release];
+      _input = nil;
+      [_adaptor release];
+      _adaptor = nil;
+      [_writer release];
+      _writer = nil;
+      return NO;
+    }
+
+    dispatch_semaphore_t startSem = dispatch_semaphore_create(0);
+    __block NSError *startError = nil;
+    [stream startCaptureWithCompletionHandler:^(NSError *captureError) {
+      startError = [captureError retain];
+      dispatch_semaphore_signal(startSem);
+    }];
+    dispatch_semaphore_wait(startSem, DISPATCH_TIME_FOREVER);
+
+    if (startError != nil)
+    {
+      NSLog(@"RemoteJoyLite: ScreenCaptureKit start failed: %@", startError);
+      [startError release];
+      [stream release];
+      [filter release];
+      [configuration release];
+      [capturedWindow release];
+      [_input release];
+      _input = nil;
+      [_adaptor release];
+      _adaptor = nil;
+      [_writer release];
+      _writer = nil;
+      return NO;
+    }
+
+    [startError release];
+    [_outputFolder release];
+    _outputFolder = [folder copy];
+    [_outputURL release];
+    _outputURL = [url retain];
+    [_stream release];
+    _stream = [stream retain];
+  _recording = YES;
+  _stopping = NO;
+
+    [stream release];
+    [filter release];
+    [configuration release];
+    [capturedWindow release];
+    return YES;
+  }
+
+  NSLog(@"RemoteJoyLite: ScreenCaptureKit recording requires macOS 13 or newer");
+  (void)quality;
+  return NO;
+}
+
+- (void)finishRecording
+{
+  if (!_recording || _stopping)
+  {
+    return;
+  }
+
+  if (_stream == nil)
+  {
+    _recording = NO;
+    return;
+  }
+
+  _stopping = YES;
+  _recording = NO;
+
+  SCStream *stream = [_stream retain];
+  [_stream release];
+  _stream = nil;
+
+  AVAssetWriter *writer = [_writer retain];
+  AVAssetWriterInput *input = [_input retain];
+  AVAssetWriterInputPixelBufferAdaptor *adaptor = [_adaptor retain];
+  NSURL *outputURL = [_outputURL retain];
+  NSString *outputFolder = [_outputFolder retain];
+
+  [_input release];
+  _input = nil;
+  [_adaptor release];
+  _adaptor = nil;
+  [_writer release];
+  _writer = nil;
+  [_outputURL release];
+  _outputURL = nil;
+  [_outputFolder release];
+  _outputFolder = nil;
+
+  [stream stopCaptureWithCompletionHandler:^(NSError *error) {
+    if (error != nil)
+    {
+      NSLog(@"RemoteJoyLite: ScreenCaptureKit stop failed: %@", error);
+    }
+
+    if (input != nil)
+    {
+      [input markAsFinished];
+    }
+
+    [writer finishWritingWithCompletionHandler:^{
+      if (writer.status == AVAssetWriterStatusCompleted && outputURL != nil)
+      {
+        dispatch_async(dispatch_get_main_queue(), ^{
+          [[NSWorkspace sharedWorkspace] activateFileViewerSelectingURLs:@[ outputURL ]];
+        });
+      }
+      else
+      {
+        NSLog(@"RemoteJoyLite: ScreenCaptureKit recording failed to finish cleanly: %@", [writer error]);
+      }
+
+      [input release];
+      [adaptor release];
+      [writer release];
+      [outputURL release];
+      [outputFolder release];
+      _stopping = NO;
+    }];
+
+    [stream release];
+  }];
+}
+
+- (NSString *)outputFolder
+{
+  return _outputFolder;
+}
+
+- (void)stream:(SCStream *)stream didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer ofType:(SCStreamOutputType)type
+{
+  (void)stream;
+  if (!_recording || type != SCStreamOutputTypeScreen || sampleBuffer == NULL)
+  {
+    return;
+  }
+
+  if (_writer == nil || _input == nil || _adaptor == nil)
+  {
+    return;
+  }
+
+  CVPixelBufferRef pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer);
+  if (pixelBuffer == NULL)
+  {
+    return;
+  }
+
+  CMTime pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer);
+  if (!_sessionStarted)
+  {
+    [_writer startSessionAtSourceTime:pts];
+    _sessionStarted = YES;
+  }
+
+  if (CMTIME_COMPARE_INLINE(pts, <=, _lastPTS))
+  {
+    pts = CMTimeAdd(_lastPTS, CMTimeMake(1, 60));
+  }
+
+  if (![_input isReadyForMoreMediaData])
+  {
+    return;
+  }
+
+  if (![_adaptor appendPixelBuffer:pixelBuffer withPresentationTime:pts])
+  {
+    NSLog(@"RemoteJoyLite: ScreenCaptureKit frame append failed: %@", [_writer error]);
+  }
+  else
+  {
+    _lastPTS = pts;
+  }
+}
+
+- (void)stream:(SCStream *)stream didStopWithError:(NSError *)error
+{
+  (void)stream;
+  if (error != nil)
+  {
+    NSLog(@"RemoteJoyLite: ScreenCaptureKit stream stopped with error: %@", error);
+  }
+}
+
+@end
+#endif
+
+static RemoteJoyLiteScreenRecorder *sScreenRecorder = nil;
+static BOOL sScreenCapturePermissionRequested = NO;
+
+static BOOL HasScreenCapturePermission(void)
+{
+  if (@available(macOS 11.0, *))
+  {
+    if (CGPreflightScreenCaptureAccess())
+    {
+      return YES;
+    }
+    if (sScreenCapturePermissionRequested)
+    {
+      return NO;
+    }
+    sScreenCapturePermissionRequested = YES;
+    return CGRequestScreenCaptureAccess();
+  }
+  return NO;
+}
+
 @interface RemoteJoyLiteMenuTarget : NSObject
 @end
 
@@ -480,6 +944,18 @@ static RemoteJoyLiteVideoRecorder *sRecorder = nil;
 - (void)toggleRecording:(id)sender
 {
   RemoteJoyLiteToggleRecording();
+}
+
+- (void)setRecordingQualityHigh:(id)sender
+{
+  (void)sender;
+  RemoteJoyLiteSetRecordingQuality(0);
+}
+
+- (void)setRecordingQualityMax:(id)sender
+{
+  (void)sender;
+  RemoteJoyLiteSetRecordingQuality(1);
 }
 
 - (void)toggleTitlebarOnHover:(id)sender
@@ -691,6 +1167,54 @@ static NSMenu *WindowMenu(NSMenu *mainMenu)
   return menu;
 }
 
+static NSMenu *RecordingMenu(NSMenu *mainMenu)
+{
+  for (NSMenuItem *item in [mainMenu itemArray])
+  {
+    if ([[item title] isEqualToString:@"Recording"])
+    {
+      if ([item submenu] != nil)
+      {
+        return [item submenu];
+      }
+    }
+  }
+
+  NSMenuItem *recordingItem = [[NSMenuItem alloc] initWithTitle:@"Recording" action:nil keyEquivalent:@""];
+  NSMenu *menu = [[NSMenu alloc] initWithTitle:@"Recording"];
+  [recordingItem setSubmenu:menu];
+  [mainMenu addItem:recordingItem];
+
+  if (sRecordingItem == nil)
+  {
+    sRecordingItem = [[NSMenuItem alloc] initWithTitle:@"Record" action:@selector(toggleRecording:) keyEquivalent:@""];
+    [sRecordingItem setTarget:sTarget];
+    [sRecordingItem setKeyEquivalent:@"r"];
+    [sRecordingItem setKeyEquivalentModifierMask:NSEventModifierFlagCommand];
+  }
+  [menu addItem:sRecordingItem];
+
+  [menu addItem:[NSMenuItem separatorItem]];
+
+  if (sHighQualityItem == nil)
+  {
+    sHighQualityItem =
+        [[NSMenuItem alloc] initWithTitle:@"High Quality (.mp4)" action:@selector(setRecordingQualityHigh:) keyEquivalent:@""];
+    [sHighQualityItem setTarget:sTarget];
+  }
+  [menu addItem:sHighQualityItem];
+
+  if (sMaxQualityItem == nil)
+  {
+    sMaxQualityItem =
+        [[NSMenuItem alloc] initWithTitle:@"Max Quality (.mov)" action:@selector(setRecordingQualityMax:) keyEquivalent:@""];
+    [sMaxQualityItem setTarget:sTarget];
+  }
+  [menu addItem:sMaxQualityItem];
+
+  return menu;
+}
+
 extern "C" void MacInstallMenus(void)
 {
   @autoreleasepool
@@ -718,14 +1242,8 @@ extern "C" void MacInstallMenus(void)
     NSMenu *windowMenu = WindowMenu(mainMenu);
     [app setWindowsMenu:windowMenu];
 
-    if (sRecordItem == nil)
-    {
-      sRecordItem = [[NSMenuItem alloc] initWithTitle:@"Record" action:@selector(toggleRecording:) keyEquivalent:@""];
-      [sRecordItem setTarget:sTarget];
-      [sRecordItem setKeyEquivalent:@"r"];
-      [sRecordItem setKeyEquivalentModifierMask:NSEventModifierFlagCommand];
-      [windowMenu addItem:sRecordItem];
-    }
+    NSMenu *recordingMenu = RecordingMenu(mainMenu);
+    (void)recordingMenu;
 
     [app activateIgnoringOtherApps:YES];
   }
@@ -746,9 +1264,24 @@ extern "C" void MacSetRecordingMenuState(int recording)
 {
   @autoreleasepool
   {
-    if (sRecordItem != nil)
+    if (sRecordingItem != nil)
     {
-      [sRecordItem setTitle:recording ? @"Stop Recording" : @"Record"];
+      [sRecordingItem setTitle:recording ? @"Stop Recording" : @"Record"];
+    }
+  }
+}
+
+extern "C" void MacSetRecordingQualityMenuState(int quality)
+{
+  @autoreleasepool
+  {
+    if (sHighQualityItem != nil)
+    {
+      [sHighQualityItem setState:(quality == 0) ? NSControlStateValueOn : NSControlStateValueOff];
+    }
+    if (sMaxQualityItem != nil)
+    {
+      [sMaxQualityItem setState:(quality != 0) ? NSControlStateValueOn : NSControlStateValueOff];
     }
   }
 }
@@ -815,11 +1348,12 @@ extern "C" int MacStartRecording(int width, int height)
 {
   @autoreleasepool
   {
+    int quality = RemoteJoyLiteGetRecordingQuality();
     if (sRecorder == nil)
     {
       sRecorder = [RemoteJoyLiteVideoRecorder new];
     }
-    return [sRecorder startWithWidth:width height:height] ? 1 : 0;
+    return [sRecorder startWithWidth:width height:height quality:quality] ? 1 : 0;
   }
 }
 
