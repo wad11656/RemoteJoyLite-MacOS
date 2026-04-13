@@ -8,6 +8,8 @@
   <string>RemoteJoyLite</string>
   <key>CFBundleExecutable</key>
   <string>RemoteJoyLite</string>
+  <key>CFBundleIconFile</key>
+  <string>RemoteJoyLite.icns</string>
   <key>CFBundleIdentifier</key>
   <string>com.psparchive.rjl</string>
   <key>CFBundleName</key>

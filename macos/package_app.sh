@@ -11,11 +11,15 @@ LIBUSB_PREFIX="${LIBUSB_PREFIX:-$(brew --prefix libusb)}"
 
 SDL_DYLIB="$SDL_PREFIX/lib/libSDL3.0.dylib"
 LIBUSB_DYLIB="$LIBUSB_PREFIX/lib/libusb-1.0.0.dylib"
+ICON_SRC="$ROOT_DIR/RemoteJoyLite_pc/RemoteJoyLite.ico"
 APP_BIN_NAME="RemoteJoyLite"
 APP_BIN_SRC="$BUILD_DIR/RemoteJoyLite-cross"
 APP_BIN_DST="$APP_DIR/Contents/MacOS/$APP_BIN_NAME"
 FW_DIR="$APP_DIR/Contents/Frameworks"
 RES_DIR="$APP_DIR/Contents/Resources"
+ICONSET_DIR="$(mktemp -d)"
+
+trap 'rm -rf "$ICONSET_DIR"' EXIT
 
 if ! command -v cmake >/dev/null 2>&1; then
   echo "cmake is required" >&2
@@ -32,6 +36,16 @@ if ! command -v pkg-config >/dev/null 2>&1; then
   exit 1
 fi
 
+if ! command -v sips >/dev/null 2>&1; then
+  echo "sips is required" >&2
+  exit 1
+fi
+
+if ! command -v iconutil >/dev/null 2>&1; then
+  echo "iconutil is required" >&2
+  exit 1
+fi
+
 if [ ! -f "$SDL_DYLIB" ]; then
   echo "Missing SDL3 dylib: $SDL_DYLIB" >&2
   exit 1
@@ -39,6 +53,11 @@ fi
 
 if [ ! -f "$LIBUSB_DYLIB" ]; then
   echo "Missing libusb dylib: $LIBUSB_DYLIB" >&2
+  exit 1
+fi
+
+if [ ! -f "$ICON_SRC" ]; then
+  echo "Missing icon source: $ICON_SRC" >&2
   exit 1
 fi
 
@@ -54,6 +73,23 @@ cp "$APP_BIN_SRC" "$APP_BIN_DST"
 cp "$SDL_DYLIB" "$FW_DIR/"
 cp "$LIBUSB_DYLIB" "$FW_DIR/"
 
+mkdir -p "$ICONSET_DIR/RemoteJoyLite.iconset"
+BASE_ICON="$ICONSET_DIR/icon_base.png"
+sips -s format png "$ICON_SRC" --out "$BASE_ICON" >/dev/null
+sips -z 16 16 "$BASE_ICON" --out "$ICONSET_DIR/RemoteJoyLite.iconset/icon_16x16.png" >/dev/null
+sips -z 32 32 "$BASE_ICON" --out "$ICONSET_DIR/RemoteJoyLite.iconset/icon_32x32.png" >/dev/null
+sips -z 64 64 "$BASE_ICON" --out "$ICONSET_DIR/RemoteJoyLite.iconset/icon_64x64.png" >/dev/null
+sips -z 128 128 "$BASE_ICON" --out "$ICONSET_DIR/RemoteJoyLite.iconset/icon_128x128.png" >/dev/null
+sips -z 256 256 "$BASE_ICON" --out "$ICONSET_DIR/RemoteJoyLite.iconset/icon_256x256.png" >/dev/null
+sips -z 512 512 "$BASE_ICON" --out "$ICONSET_DIR/RemoteJoyLite.iconset/icon_512x512.png" >/dev/null
+cp "$ICONSET_DIR/RemoteJoyLite.iconset/icon_32x32.png" "$ICONSET_DIR/RemoteJoyLite.iconset/icon_16x16@2x.png"
+cp "$ICONSET_DIR/RemoteJoyLite.iconset/icon_64x64.png" "$ICONSET_DIR/RemoteJoyLite.iconset/icon_32x32@2x.png"
+cp "$ICONSET_DIR/RemoteJoyLite.iconset/icon_128x128.png" "$ICONSET_DIR/RemoteJoyLite.iconset/icon_64x64@2x.png"
+cp "$ICONSET_DIR/RemoteJoyLite.iconset/icon_256x256.png" "$ICONSET_DIR/RemoteJoyLite.iconset/icon_128x128@2x.png"
+cp "$ICONSET_DIR/RemoteJoyLite.iconset/icon_512x512.png" "$ICONSET_DIR/RemoteJoyLite.iconset/icon_256x256@2x.png"
+cp "$ICONSET_DIR/RemoteJoyLite.iconset/icon_512x512.png" "$ICONSET_DIR/RemoteJoyLite.iconset/icon_512x512@2x.png"
+iconutil -c icns "$ICONSET_DIR/RemoteJoyLite.iconset" -o "$RES_DIR/RemoteJoyLite.icns"
+
 chmod +x "$APP_BIN_DST"
 
 cat > "$APP_DIR/Contents/Info.plist" <<'EOF'
@@ -67,6 +103,8 @@ cat > "$APP_DIR/Contents/Info.plist" <<'EOF'
   <string>RemoteJoyLite</string>
   <key>CFBundleExecutable</key>
   <string>RemoteJoyLite</string>
+  <key>CFBundleIconFile</key>
+  <string>RemoteJoyLite.icns</string>
   <key>CFBundleIdentifier</key>
   <string>com.psparchive.rjl</string>
   <key>CFBundleName</key>
