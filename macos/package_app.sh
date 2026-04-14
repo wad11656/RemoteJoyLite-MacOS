@@ -13,6 +13,7 @@ SDL_DYLIB="$SDL_PREFIX/lib/libSDL3.0.dylib"
 LIBUSB_DYLIB="$LIBUSB_PREFIX/lib/libusb-1.0.0.dylib"
 ICON_SRC="$ROOT_DIR/RemoteJoyLite_pc/RemoteJoyLite.ico"
 APP_BIN_NAME="RemoteJoyLite"
+ICON_NAME="RemoteJoyLite"
 APP_BIN_SRC="$BUILD_DIR/RemoteJoyLite-cross"
 APP_BIN_DST="$APP_DIR/Contents/MacOS/$APP_BIN_NAME"
 FW_DIR="$APP_DIR/Contents/Frameworks"
@@ -73,22 +74,22 @@ cp "$APP_BIN_SRC" "$APP_BIN_DST"
 cp "$SDL_DYLIB" "$FW_DIR/"
 cp "$LIBUSB_DYLIB" "$FW_DIR/"
 
-mkdir -p "$ICONSET_DIR/RemoteJoyLite.iconset"
+mkdir -p "$ICONSET_DIR/$ICON_NAME.iconset"
 BASE_ICON="$ICONSET_DIR/icon_base.png"
 sips -s format png "$ICON_SRC" --out "$BASE_ICON" >/dev/null
-sips -z 16 16 "$BASE_ICON" --out "$ICONSET_DIR/RemoteJoyLite.iconset/icon_16x16.png" >/dev/null
-sips -z 32 32 "$BASE_ICON" --out "$ICONSET_DIR/RemoteJoyLite.iconset/icon_32x32.png" >/dev/null
-sips -z 64 64 "$BASE_ICON" --out "$ICONSET_DIR/RemoteJoyLite.iconset/icon_64x64.png" >/dev/null
-sips -z 128 128 "$BASE_ICON" --out "$ICONSET_DIR/RemoteJoyLite.iconset/icon_128x128.png" >/dev/null
-sips -z 256 256 "$BASE_ICON" --out "$ICONSET_DIR/RemoteJoyLite.iconset/icon_256x256.png" >/dev/null
-sips -z 512 512 "$BASE_ICON" --out "$ICONSET_DIR/RemoteJoyLite.iconset/icon_512x512.png" >/dev/null
-cp "$ICONSET_DIR/RemoteJoyLite.iconset/icon_32x32.png" "$ICONSET_DIR/RemoteJoyLite.iconset/icon_16x16@2x.png"
-cp "$ICONSET_DIR/RemoteJoyLite.iconset/icon_64x64.png" "$ICONSET_DIR/RemoteJoyLite.iconset/icon_32x32@2x.png"
-cp "$ICONSET_DIR/RemoteJoyLite.iconset/icon_128x128.png" "$ICONSET_DIR/RemoteJoyLite.iconset/icon_64x64@2x.png"
-cp "$ICONSET_DIR/RemoteJoyLite.iconset/icon_256x256.png" "$ICONSET_DIR/RemoteJoyLite.iconset/icon_128x128@2x.png"
-cp "$ICONSET_DIR/RemoteJoyLite.iconset/icon_512x512.png" "$ICONSET_DIR/RemoteJoyLite.iconset/icon_256x256@2x.png"
-cp "$ICONSET_DIR/RemoteJoyLite.iconset/icon_512x512.png" "$ICONSET_DIR/RemoteJoyLite.iconset/icon_512x512@2x.png"
-iconutil -c icns "$ICONSET_DIR/RemoteJoyLite.iconset" -o "$RES_DIR/RemoteJoyLite.icns"
+sips -z 16 16 "$BASE_ICON" --out "$ICONSET_DIR/$ICON_NAME.iconset/icon_16x16.png" >/dev/null
+sips -z 32 32 "$BASE_ICON" --out "$ICONSET_DIR/$ICON_NAME.iconset/icon_32x32.png" >/dev/null
+sips -z 64 64 "$BASE_ICON" --out "$ICONSET_DIR/$ICON_NAME.iconset/icon_64x64.png" >/dev/null
+sips -z 128 128 "$BASE_ICON" --out "$ICONSET_DIR/$ICON_NAME.iconset/icon_128x128.png" >/dev/null
+sips -z 256 256 "$BASE_ICON" --out "$ICONSET_DIR/$ICON_NAME.iconset/icon_256x256.png" >/dev/null
+sips -z 512 512 "$BASE_ICON" --out "$ICONSET_DIR/$ICON_NAME.iconset/icon_512x512.png" >/dev/null
+cp "$ICONSET_DIR/$ICON_NAME.iconset/icon_32x32.png" "$ICONSET_DIR/$ICON_NAME.iconset/icon_16x16@2x.png"
+cp "$ICONSET_DIR/$ICON_NAME.iconset/icon_64x64.png" "$ICONSET_DIR/$ICON_NAME.iconset/icon_32x32@2x.png"
+cp "$ICONSET_DIR/$ICON_NAME.iconset/icon_128x128.png" "$ICONSET_DIR/$ICON_NAME.iconset/icon_64x64@2x.png"
+cp "$ICONSET_DIR/$ICON_NAME.iconset/icon_256x256.png" "$ICONSET_DIR/$ICON_NAME.iconset/icon_128x128@2x.png"
+cp "$ICONSET_DIR/$ICON_NAME.iconset/icon_512x512.png" "$ICONSET_DIR/$ICON_NAME.iconset/icon_256x256@2x.png"
+cp "$ICONSET_DIR/$ICON_NAME.iconset/icon_512x512.png" "$ICONSET_DIR/$ICON_NAME.iconset/icon_512x512@2x.png"
+iconutil -c icns "$ICONSET_DIR/$ICON_NAME.iconset" -o "$RES_DIR/$ICON_NAME.icns"
 
 chmod +x "$APP_BIN_DST"
 
@@ -104,7 +105,7 @@ cat > "$APP_DIR/Contents/Info.plist" <<'EOF'
   <key>CFBundleExecutable</key>
   <string>RemoteJoyLite</string>
   <key>CFBundleIconFile</key>
-  <string>RemoteJoyLite.icns</string>
+  <string>RemoteJoyLite</string>
   <key>CFBundleIdentifier</key>
   <string>com.psparchive.rjl</string>
   <key>CFBundleName</key>
@@ -139,6 +140,12 @@ if [ -n "${CODESIGN_IDENTITY:-}" ]; then
   codesign "${CODESIGN_OPTS[@]}" "$FW_DIR/libusb-1.0.0.dylib"
   codesign "${CODESIGN_OPTS[@]}" "$APP_BIN_DST"
   codesign "${CODESIGN_OPTS[@]}" "$APP_DIR"
+fi
+
+touch "$APP_DIR"
+
+if command -v /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister >/dev/null 2>&1; then
+  /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP_DIR" >/dev/null 2>&1 || true
 fi
 
 if [ "${CREATE_ZIP:-0}" = "1" ]; then
