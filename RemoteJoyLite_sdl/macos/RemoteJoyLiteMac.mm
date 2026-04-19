@@ -639,27 +639,9 @@ static void UpdateMicrophoneMenuState(void)
   _input = input;
   [_adaptor release];
   _adaptor = adaptor;
-  [_audioInput release];
-  _audioInput = nil;
-  [_audioDeviceInput release];
-  _audioDeviceInput = nil;
-  [_audioOutput release];
-  _audioOutput = nil;
-  [_audioSession release];
-  _audioSession = nil;
-  [_audioDeviceUID release];
-  _audioDeviceUID = nil;
-  _audioConfigured = NO;
-  _haveAudioFirstPTS = NO;
-  _lastAudioPTS = kCMTimeZero;
-
-  [self ensureAudioCaptureSession];
-  [self configureAudioCaptureForWriter:writer];
-
   if (![writer startWriting])
   {
     NSLog(@"RemoteJoyLite: startWriting failed: %@", [writer error]);
-    [self stopAudioCapture];
     [adaptor release];
     [input release];
     [writer release];
@@ -1194,11 +1176,6 @@ static void UpdateMicrophoneMenuState(void)
   {
     dispatch_sync(_encodeQueue, ^{});
   }
-  AVAssetWriterInput *audioInput = [_audioInput retain];
-  if (audioInput != nil)
-  {
-    [audioInput markAsFinished];
-  }
   [_input markAsFinished];
 
   dispatch_semaphore_t sem = dispatch_semaphore_create(0);
@@ -1228,8 +1205,6 @@ static void UpdateMicrophoneMenuState(void)
   _outputURL = nil;
   [_outputFolder release];
   _outputFolder = nil;
-  [audioInput release];
-  _audioInput = nil;
   _audioConfigured = NO;
   _haveAudioFirstPTS = NO;
   _lastAudioPTS = kCMTimeZero;
