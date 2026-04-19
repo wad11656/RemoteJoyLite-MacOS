@@ -129,6 +129,7 @@ void RemoteJoyLiteSetRecordingQuality(int quality)
 static int gUsbHostfsReady = 0;
 static int gUsbHostfsExit  = 0;
 static libusb_device_handle *gUsbDev;
+static libusb_context *gUsbCtx = NULL;
 static int gPSPReady     = 0;
 static int gUsbHostError = 0;
 
@@ -197,12 +198,24 @@ static void CaptureRecordingFrame(SDL_Surface *source)
 
 static void usbInit()
 {
-  libusb_init_context(NULL, NULL, 0);
+  if (gUsbCtx == NULL)
+  {
+    int ret = libusb_init(&gUsbCtx);
+    if (ret != 0)
+    {
+      fprintf(stderr, "%s: libusb_init failed: %d\n", __func__, ret);
+      gUsbCtx = NULL;
+    }
+  }
 }
 
 static void usbQuit()
 {
-  libusb_exit(NULL);
+  if (gUsbCtx != NULL)
+  {
+    libusb_exit(gUsbCtx);
+    gUsbCtx = NULL;
+  }
 }
 
 static void usbCloseDevice(void)
@@ -234,9 +247,14 @@ static int usbCheckDevice(void)
 
 static void usbOpenDevice(void)
 {
+  if (gUsbCtx == NULL)
+  {
+    return;
+  }
+
   while (1)
   {
-    libusb_device_handle *handle = libusb_open_device_with_vid_pid(NULL, SONY_VID, HOSTFSDRIVER_PID);
+    libusb_device_handle *handle = libusb_open_device_with_vid_pid(gUsbCtx, SONY_VID, HOSTFSDRIVER_PID);
     if (handle)
     {
       int ret = libusb_set_configuration(handle, 1);

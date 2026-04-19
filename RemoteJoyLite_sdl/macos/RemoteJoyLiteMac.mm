@@ -211,7 +211,7 @@ static BOOL sTitlebarOnHoverEnabled = YES;
 
 static RemoteJoyLiteToastController *sToastController = nil;
 static NSString *sSelectedMicUID = nil;
-static NSData *sSelectedMicSourceID = nil;
+static NSString *sSelectedMicSourceID = nil;
 static BOOL sMicMuted = NO;
 static BOOL sMicPrefsLoaded = NO;
 static NSMenuItem *sMicHeaderItem = nil;
@@ -257,24 +257,6 @@ static NSString *ReadPrefFile(NSString *filename)
   return [contents stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
 }
 
-static NSData *ReadDataPrefFile(NSString *filename)
-{
-  NSString *dir = RecordingPrefsDirectory();
-  if (dir == nil)
-  {
-    return nil;
-  }
-
-  NSString *path = [dir stringByAppendingPathComponent:filename];
-  NSData *contents = [NSData dataWithContentsOfFile:path];
-  if (contents == nil || [contents length] == 0)
-  {
-    return nil;
-  }
-
-  return contents;
-}
-
 static void WritePrefFile(NSString *filename, NSString *value)
 {
   NSString *dir = RecordingPrefsDirectory();
@@ -295,29 +277,6 @@ static void WritePrefFile(NSString *filename, NSString *value)
   if (![value writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:&error])
   {
     NSLog(@"RemoteJoyLite: failed to write preference %@: %@", path, error);
-  }
-}
-
-static void WriteDataPrefFile(NSString *filename, NSData *value)
-{
-  NSString *dir = RecordingPrefsDirectory();
-  if (dir == nil)
-  {
-    return;
-  }
-
-  NSFileManager *fm = [NSFileManager defaultManager];
-  NSError *error = nil;
-  if (![fm createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:&error])
-  {
-    NSLog(@"RemoteJoyLite: failed to create preferences directory %@: %@", dir, error);
-    return;
-  }
-
-  NSString *path = [dir stringByAppendingPathComponent:filename];
-  if (value == nil || ![value writeToFile:path atomically:YES])
-  {
-    NSLog(@"RemoteJoyLite: failed to write binary preference %@", path);
   }
 }
 
@@ -421,7 +380,7 @@ static void LoadMicrophonePreferences(void)
     sSelectedMicUID = nil;
   }
 
-  NSData *selectedSourceID = ReadDataPrefFile(kMicSourceSelectionPrefFile);
+  NSString *selectedSourceID = ReadPrefFile(kMicSourceSelectionPrefFile);
   if (selectedSourceID != nil && [selectedSourceID length] > 0)
   {
     sSelectedMicSourceID = [selectedSourceID copy];
@@ -455,11 +414,11 @@ static void SaveMicrophonePreferences(void)
 
   if (sSelectedMicSourceID != nil)
   {
-    WriteDataPrefFile(kMicSourceSelectionPrefFile, sSelectedMicSourceID);
+    WritePrefFile(kMicSourceSelectionPrefFile, sSelectedMicSourceID);
   }
   else
   {
-    WriteDataPrefFile(kMicSourceSelectionPrefFile, nil);
+    WritePrefFile(kMicSourceSelectionPrefFile, @"");
   }
 
   WritePrefFile(kMicMutePrefFile, sMicMuted ? @"1" : @"0");
@@ -881,7 +840,8 @@ static void UpdateMicrophoneMenuState(void)
   CMAudioFormatDescriptionRef audioFormat = (CMAudioFormatDescriptionRef)CMSampleBufferGetFormatDescription(sampleBuffer);
   const AudioStreamBasicDescription *asbd =
       audioFormat != NULL ? CMAudioFormatDescriptionGetStreamBasicDescription(audioFormat) : NULL;
-  if (asbd == NULL || asbd->mBytesPerFrame == 0 || asbd->mChannelsPerFrame == 0)
+  if (asbd == NULL || asbd->mBytesPerFrame == 0 || asbd->mChannelsPerFrame == 0 ||
+      asbd->mFormatID != kAudioFormatLinearPCM)
   {
     NSLog(@"RemoteJoyLite: microphone sample buffer has no usable format");
     return NO;
@@ -908,7 +868,12 @@ static void UpdateMicrophoneMenuState(void)
   [self stopAudioMonitoring];
 
   NSError *error = nil;
-  AVAudioFormat *monitorFormat = [[AVAudioFormat alloc] initWithStreamDescription:asbd];
+  AVAudioCommonFormat commonFormat = (asbd->mFormatFlags & kAudioFormatFlagIsFloat) ? AVAudioPCMFormatFloat32
+                                                                                    : AVAudioPCMFormatInt16;
+  BOOL interleaved = ((asbd->mFormatFlags & kAudioFormatFlagIsNonInterleaved) == 0);
+  AVAudioFormat *monitorFormat =
+      [[AVAudioFormat alloc] initWithCommonFormat:commonFormat sampleRate:asbd->mSampleRate
+                                       channels:asbd->mChannelsPerFrame interleaved:interleaved];
   if (monitorFormat == nil)
   {
     NSLog(@"RemoteJoyLite: failed to create monitoring audio format");
@@ -917,12 +882,23 @@ static void UpdateMicrophoneMenuState(void)
 
   AVAudioEngine *engine = [[AVAudioEngine alloc] init];
   AVAudioPlayerNode *playerNode = [[AVAudioPlayerNode alloc] init];
-  [engine attachNode:playerNode];
-  [engine connect:playerNode to:[engine mainMixerNode] format:monitorFormat];
-  [engine prepare];
-  if (![engine startAndReturnError:&error])
+  @try
   {
-    NSLog(@"RemoteJoyLite: failed to start audio monitoring engine: %@", error);
+    [engine attachNode:playerNode];
+    [engine connect:playerNode to:[engine mainMixerNode] format:monitorFormat];
+    [engine prepare];
+    if (![engine startAndReturnError:&error])
+    {
+      NSLog(@"RemoteJoyLite: failed to start audio monitoring engine: %@", error);
+      [playerNode release];
+      [engine release];
+      [monitorFormat release];
+      return NO;
+    }
+  }
+  @catch (NSException *exception)
+  {
+    NSLog(@"RemoteJoyLite: audio monitoring setup failed: %@", exception);
     [playerNode release];
     [engine release];
     [monitorFormat release];
@@ -2084,7 +2060,7 @@ static NSMenu *RecordingMenu(NSMenu *mainMenu)
               [[NSMenuItem alloc] initWithTitle:title action:@selector(selectMicrophone:) keyEquivalent:@""];
           [deviceItem setTarget:sTarget];
           NSDictionary *info =
-              @{ @"deviceUID" : device.uniqueID, @"sourceID" : source.inputSourceID ?: [NSData data] };
+              @{ @"deviceUID" : device.uniqueID, @"sourceID" : source.inputSourceID ?: @"" };
           [deviceItem setRepresentedObject:info];
           [sMicDeviceItems addObject:deviceItem];
           [menu addItem:deviceItem];
