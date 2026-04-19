@@ -14,13 +14,18 @@ LIBUSB_DYLIB="$LIBUSB_PREFIX/lib/libusb-1.0.0.dylib"
 ICON_SRC="$ROOT_DIR/RemoteJoyLite_pc/RemoteJoyLite.ico"
 APP_BIN_NAME="RemoteJoyLite"
 ICON_NAME="RemoteJoyLite"
+DMG_NAME="RemoteJoyLite-macOS"
 APP_BIN_SRC="$BUILD_DIR/RemoteJoyLite-cross"
 APP_BIN_DST="$APP_DIR/Contents/MacOS/$APP_BIN_NAME"
 FW_DIR="$APP_DIR/Contents/Frameworks"
 RES_DIR="$APP_DIR/Contents/Resources"
 ICONSET_DIR="$(mktemp -d)"
+DMG_STAGE_DIR="$(mktemp -d)"
+DMG_RW_PATH="$ROOT_DIR/dist/$DMG_NAME-rw.dmg"
+DMG_FINAL_PATH="$ROOT_DIR/dist/$DMG_NAME.dmg"
+DMG_MOUNT_POINT="$(mktemp -d /tmp/RemoteJoyLite-dmg-mount.XXXX)"
 
-trap 'rm -rf "$ICONSET_DIR"' EXIT
+trap 'rm -rf "$ICONSET_DIR" "$DMG_STAGE_DIR" "$DMG_MOUNT_POINT"' EXIT
 
 if ! command -v cmake >/dev/null 2>&1; then
   echo "cmake is required" >&2
@@ -44,6 +49,16 @@ fi
 
 if ! command -v iconutil >/dev/null 2>&1; then
   echo "iconutil is required" >&2
+  exit 1
+fi
+
+if ! command -v hdiutil >/dev/null 2>&1; then
+  echo "hdiutil is required" >&2
+  exit 1
+fi
+
+if ! command -v osascript >/dev/null 2>&1; then
+  echo "osascript is required" >&2
   exit 1
 fi
 
@@ -120,6 +135,8 @@ cat > "$APP_DIR/Contents/Info.plist" <<'EOF'
   <string>13.0</string>
   <key>NSHighResolutionCapable</key>
   <true/>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>RemoteJoyLite uses microphone input for live monitoring and recording.</string>
 </dict>
 </plist>
 EOF
@@ -151,6 +168,37 @@ fi
 if [ "${CREATE_ZIP:-0}" = "1" ]; then
   mkdir -p "$ROOT_DIR/dist"
   ditto -c -k --keepParent "$APP_DIR" "$ROOT_DIR/dist/RemoteJoyLite-macOS.zip"
+fi
+
+if [ "${CREATE_DMG:-0}" = "1" ]; then
+  mkdir -p "$ROOT_DIR/dist"
+  rm -f "$DMG_RW_PATH" "$DMG_FINAL_PATH"
+  rm -rf "$DMG_STAGE_DIR"/*
+  cp -R "$APP_DIR" "$DMG_STAGE_DIR/"
+  ln -s /Applications "$DMG_STAGE_DIR/Applications"
+  hdiutil create -ov -fs HFS+ -format UDRW -volname "RemoteJoyLite" \
+    -srcfolder "$DMG_STAGE_DIR" "$DMG_RW_PATH" >/dev/null
+  hdiutil attach "$DMG_RW_PATH" -mountpoint "$DMG_MOUNT_POINT" -nobrowse -quiet
+
+osascript <<'EOF'
+tell application "Finder"
+  tell disk "RemoteJoyLite"
+    open
+    delay 1
+    set current view of container window to icon view
+    set toolbar visible of container window to false
+    set statusbar visible of container window to false
+    set bounds of container window to {120, 120, 500, 300}
+    update without registering applications
+    delay 1
+    close
+  end tell
+end tell
+EOF
+
+  hdiutil detach "$DMG_MOUNT_POINT" -quiet
+  hdiutil convert "$DMG_RW_PATH" -format UDZO -imagekey zlib-level=9 -o "$DMG_FINAL_PATH" >/dev/null
+  rm -f "$DMG_RW_PATH"
 fi
 
 echo "Created: $APP_DIR"

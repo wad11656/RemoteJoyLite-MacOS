@@ -135,7 +135,7 @@ static int gUsbHostError = 0;
 // framebuffer
 static uint8_t gBuf[SCREEN_WIDTH * SCREEN_HEIGHT * 4];
 static uint32_t gBufSize = 0;
-static uint8_t gBufMode;
+static uint32_t gBufMode;
 
 void RemoteJoyLiteToggleRecording(void)
 {
@@ -645,7 +645,7 @@ SDL_AppResult SDL_AppIterate(void *appstate)
   int pitch              = SCREEN_WIDTH * 2;
   SDL_PixelFormat format = SDL_PIXELFORMAT_BGR565;
 
-  switch (gBufMode >> 4)
+  switch ((gBufMode >> 4) & 0x0F)
   {
     case 0x00:
       break;
@@ -653,15 +653,20 @@ SDL_AppResult SDL_AppIterate(void *appstate)
       format = SDL_PIXELFORMAT_XBGR1555;
       break;
     case 0x02:
-      format = SDL_PIXELFORMAT_BGRA4444;
+      format = SDL_PIXELFORMAT_XBGR4444;
       break;
     case 0x03:
-      format = SDL_PIXELFORMAT_BGRA8888;
+      format = SDL_PIXELFORMAT_XBGR8888;
       pitch  = SCREEN_WIDTH * 4;
       break;
   }
 
   SDL_Surface *src = SDL_CreateSurfaceFrom(SCREEN_WIDTH, SCREEN_HEIGHT, format, gBuf, pitch);
+  if (src == NULL)
+  {
+    return SDL_APP_CONTINUE;
+  }
+  SDL_SetSurfaceBlendMode(src, SDL_BLENDMODE_NONE);
 
   SDL_Surface *dst;
   if (SDL_LockTextureToSurface(gTex, NULL, &dst))
