@@ -1,3 +1,5 @@
+# RemoteJoyLite-MacOS
+
 MacOS <a href="https://github.com/wad11656/RemoteJoyLite-MacOS/releases/latest">Release</a> branch of RemoteJoyLite with built-in **Record**. Audio input supported.
 <img width="628" height="314" alt="Image" src="https://github.com/user-attachments/assets/de8d57b2-1799-48df-a5c0-21d24d22cefa" />
 
