@@ -176,11 +176,23 @@ if [ "${CREATE_DMG:-0}" = "1" ]; then
   rm -rf "$DMG_STAGE_DIR"/*
   cp -R "$APP_DIR" "$DMG_STAGE_DIR/"
   ln -s /Applications "$DMG_STAGE_DIR/Applications"
+  cat > "$DMG_STAGE_DIR/README.txt" <<'EOF'
+1. Copy RemoteJoyLite.app into Applications.
+2. Control-click or right-click RemoteJoyLite.app.
+3. Choose Open.
+4. Confirm the prompt.
+
+If macOS still blocks it, go to:
+System Settings > Privacy & Security
+and click Open Anyway.
+
+After the first launch, the app should open normally.
+EOF
   hdiutil create -ov -fs HFS+ -format UDRW -volname "RemoteJoyLite" \
     -srcfolder "$DMG_STAGE_DIR" "$DMG_RW_PATH" >/dev/null
   hdiutil attach "$DMG_RW_PATH" -mountpoint "$DMG_MOUNT_POINT" -nobrowse -quiet
 
-osascript <<'EOF'
+osascript <<'EOF' || true
 tell application "Finder"
   tell disk "RemoteJoyLite"
     open
