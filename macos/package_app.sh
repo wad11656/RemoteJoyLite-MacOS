@@ -5,6 +5,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="${BUILD_DIR:-$ROOT_DIR/build-macos}"
 APP_DIR="${APP_DIR:-$ROOT_DIR/dist/RemoteJoyLite.app}"
 CONFIG="${CONFIG:-Release}"
+INCLUDE_PSP_PRX="${INCLUDE_PSP_PRX:-${CREATE_DMG:-0}}"
+PSP_PRX_SRC="${PSP_PRX_SRC:-$ROOT_DIR/RemoteJoyLite.prx}"
 
 SDL_PREFIX="${SDL_PREFIX:-$(brew --prefix sdl3)}"
 LIBUSB_PREFIX="${LIBUSB_PREFIX:-$(brew --prefix libusb)}"
@@ -21,11 +23,13 @@ FW_DIR="$APP_DIR/Contents/Frameworks"
 RES_DIR="$APP_DIR/Contents/Resources"
 ICONSET_DIR="$(mktemp -d)"
 DMG_STAGE_DIR="$(mktemp -d)"
+PSP_TMP_DIR="$(mktemp -d)"
 DMG_RW_PATH="$ROOT_DIR/dist/$DMG_NAME-rw.dmg"
 DMG_FINAL_PATH="$ROOT_DIR/dist/$DMG_NAME.dmg"
 DMG_MOUNT_POINT="$(mktemp -d /tmp/RemoteJoyLite-dmg-mount.XXXX)"
+PSP_PRX_TMP="$PSP_TMP_DIR/RemoteJoyLite.prx"
 
-trap 'rm -rf "$ICONSET_DIR" "$DMG_STAGE_DIR" "$DMG_MOUNT_POINT"' EXIT
+trap 'rm -rf "$ICONSET_DIR" "$DMG_STAGE_DIR" "$PSP_TMP_DIR" "$DMG_MOUNT_POINT"' EXIT
 
 if ! command -v cmake >/dev/null 2>&1; then
   echo "cmake is required" >&2
@@ -75,6 +79,15 @@ fi
 if [ ! -f "$ICON_SRC" ]; then
   echo "Missing icon source: $ICON_SRC" >&2
   exit 1
+fi
+
+if [ "$INCLUDE_PSP_PRX" = "1" ]; then
+  if [ ! -f "$PSP_PRX_SRC" ]; then
+    echo "Missing PSP plugin: $PSP_PRX_SRC" >&2
+    exit 1
+  fi
+
+  cp "$PSP_PRX_SRC" "$PSP_PRX_TMP"
 fi
 
 cmake -S "$ROOT_DIR/RemoteJoyLite_sdl" -B "$BUILD_DIR" \
@@ -151,13 +164,16 @@ install_name_tool -change "$LIBUSB_DYLIB" "@rpath/libusb-1.0.0.dylib" "$APP_BIN_
 install_name_tool -id "@rpath/libSDL3.0.dylib" "$FW_DIR/libSDL3.0.dylib"
 install_name_tool -id "@rpath/libusb-1.0.0.dylib" "$FW_DIR/libusb-1.0.0.dylib"
 
-if [ -n "${CODESIGN_IDENTITY:-}" ]; then
+CODESIGN_IDENTITY="${CODESIGN_IDENTITY:--}"
+if [ "$CODESIGN_IDENTITY" = "-" ]; then
+  CODESIGN_OPTS=(--force --sign -)
+else
   CODESIGN_OPTS=(--force --options runtime --timestamp --sign "$CODESIGN_IDENTITY")
-  codesign "${CODESIGN_OPTS[@]}" "$FW_DIR/libSDL3.0.dylib"
-  codesign "${CODESIGN_OPTS[@]}" "$FW_DIR/libusb-1.0.0.dylib"
-  codesign "${CODESIGN_OPTS[@]}" "$APP_BIN_DST"
-  codesign "${CODESIGN_OPTS[@]}" "$APP_DIR"
 fi
+codesign "${CODESIGN_OPTS[@]}" "$FW_DIR/libSDL3.0.dylib"
+codesign "${CODESIGN_OPTS[@]}" "$FW_DIR/libusb-1.0.0.dylib"
+codesign "${CODESIGN_OPTS[@]}" "$APP_BIN_DST"
+codesign "${CODESIGN_OPTS[@]}" "$APP_DIR"
 
 touch "$APP_DIR"
 
@@ -175,18 +191,73 @@ if [ "${CREATE_DMG:-0}" = "1" ]; then
   rm -f "$DMG_RW_PATH" "$DMG_FINAL_PATH"
   rm -rf "$DMG_STAGE_DIR"/*
   cp -R "$APP_DIR" "$DMG_STAGE_DIR/"
-  ln -s /Applications "$DMG_STAGE_DIR/Applications"
-  cat > "$DMG_STAGE_DIR/README.txt" <<'EOF'
-1. Copy RemoteJoyLite.app into Applications.
-2. Control-click or right-click RemoteJoyLite.app.
-3. Choose Open.
-4. Confirm the prompt.
+  if [ "$INCLUDE_PSP_PRX" = "1" ]; then
+    cp "$PSP_PRX_TMP" "$DMG_STAGE_DIR/RemoteJoyLite.prx"
+  fi
+  cat > "$DMG_STAGE_DIR/Install.command" <<'EOF'
+#!/bin/bash
+set -e
+DIR="$(cd "$(dirname "$0")" && pwd)"
+SRC="$DIR/RemoteJoyLite.app"
+DST="/Applications/RemoteJoyLite.app"
 
-If macOS still blocks it, go to:
-System Settings > Privacy & Security
-and click Open Anyway.
+if [ ! -d "$SRC" ]; then
+  echo "RemoteJoyLite.app was not found next to this installer."
+  echo "Make sure you ran Install.command from the mounted disk image."
+  exit 1
+fi
 
-After the first launch, the app should open normally.
+echo "Installing RemoteJoyLite to /Applications ..."
+rm -rf "$DST"
+cp -R "$SRC" "$DST"
+
+echo "Clearing quarantine attribute ..."
+xattr -cr "$DST"
+
+echo
+echo "Done. RemoteJoyLite is now in your Applications folder."
+echo "You can close this Terminal window."
+EOF
+  chmod +x "$DMG_STAGE_DIR/Install.command"
+  cat > "$DMG_STAGE_DIR/README.rtf" <<'EOF'
+{\rtf1\ansi\deff0
+{\fonttbl{\f0\fmodern\fcharset0 Menlo-Regular;}}
+\fs24
+===== Installation on Mac =====\par
+Easiest:\par
+1. Right-click Install.command and choose Open.\par
+2. Confirm the prompt. Terminal will copy the app to Applications and clear the quarantine flag.\par
+3. Launch RemoteJoyLite from Applications.\par
+\par
+Manual alternative:\par
+1. Drag RemoteJoyLite.app into Applications.\par
+2. Open Terminal and run:\par
+   xattr -cr /Applications/RemoteJoyLite.app\par
+3. Launch RemoteJoyLite from Applications.\par
+\par
+If macOS still blocks Install.command with "unidentified developer", go to:\par
+System Settings > Privacy & Security\par
+and click Open Anyway, then re-run it.\par
+\par
+===== Installation on PSP =====\par
+1. Copy RemoteJoyLite.prx into ms0:/seplugins/\par
+2. Add the following into ms0:/seplugins/game.txt, ms0:/seplugins/vsh.txt and ms0:/seplugins/pops.txt. Adapt this step for ARK-4 following:\par
+   https://github.com/PSP-Archive/ARK-4/wiki/Plugins\par
+\par
+   ms0:/seplugins/RemoteJoyLite.prx 1\par
+\par
+On 2k/3k/Go/Street, you are recommended to disable extended/high memory layout in your CFW settings, as well as disable ISO/Inferno cache and memory stick speedup.\par
+\par
+On ARK CFW, you might also want to make the following change in ms0:/PSP/SAVEDATA/ARK_01234/SETTINGS.TXT if you plan to use RJL with GTA titles:\par
+\par
+   # Enable Extra RAM on GTA LCS and VCS for CheatDeviceRemastered\par
+   ULUS10041 ULUS10160 ULES00151 ULES00502, highmem, on\par
+\par
+to:\par
+\par
+   # Enable Extra RAM on GTA LCS and VCS for CheatDeviceRemastered\par
+   #ULUS10041 ULUS10160 ULES00151 ULES00502, highmem, on\par
+}
 EOF
   hdiutil create -ov -fs HFS+ -format UDRW -volname "RemoteJoyLite" \
     -srcfolder "$DMG_STAGE_DIR" "$DMG_RW_PATH" >/dev/null
