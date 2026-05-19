@@ -225,26 +225,32 @@ EOF
 \fs24
 ===== Installation on Mac =====\par
 Easiest:\par
-1. Right-click Install.command and choose Open.\par
+1. Right-click `Install.command` and choose Open.\par
 2. Confirm the prompt. Terminal will copy the app to Applications and clear the quarantine flag.\par
 3. Launch RemoteJoyLite from Applications.\par
 \par
 Manual alternative:\par
 1. Drag RemoteJoyLite.app into Applications.\par
 2. Open Terminal and run:\par
-   xattr -cr /Applications/RemoteJoyLite.app\par
+   sudo xattr -cr /Applications/RemoteJoyLite.app\par
 3. Launch RemoteJoyLite from Applications.\par
 \par
-If macOS still blocks Install.command with "unidentified developer", go to:\par
+If macOS still blocks `Install.command` with "unidentified developer", go to:\par
 System Settings > Privacy & Security\par
 and click Open Anyway, then re-run it.\par
 \par
 ===== Installation on PSP =====\par
 1. Copy RemoteJoyLite.prx into ms0:/seplugins/\par
-2. Add the following into ms0:/seplugins/game.txt, ms0:/seplugins/vsh.txt and ms0:/seplugins/pops.txt. Adapt this step for ARK-4 following:\par
-   https://github.com/PSP-Archive/ARK-4/wiki/Plugins\par
-\par
+2. Add the following into ms0:/seplugins/game.txt, ms0:/seplugins/vsh.txt and ms0:/seplugins/pops.txt:\par
    ms0:/seplugins/RemoteJoyLite.prx 1\par
+\par
+   On ARK-4, instead add these entries to /SEPLUGINS/PLUGINS.TXT:\par
+\par
+   game, ms0:/seplugins/RemoteJoyLite.prx, enabled\par
+   vsh, ms0:/seplugins/RemoteJoyLite.prx, enabled\par
+   pops, ms0:/seplugins/RemoteJoyLite.prx, enabled\par
+\par
+  On PSP Go, copy the plugin to Internal Storage (ef0:/SEPLUGINS) instead, and change "ms0:/" in the entries above to "ef0:/".\par
 \par
 On 2k/3k/Go/Street, you are recommended to disable extended/high memory layout in your CFW settings, as well as disable ISO/Inferno cache and memory stick speedup.\par
 \par
